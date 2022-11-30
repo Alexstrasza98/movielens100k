@@ -2,6 +2,8 @@ import pandas as pd
 from datetime import datetime
 import time
 import uszipcode
+import re
+from collections import defaultdict
 
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -13,7 +15,7 @@ from sklearn.model_selection import train_test_split
 def zipcode2area(sr, zipcode, mode="county"):
     # assume all zip codes are from US
     address = sr.by_zipcode(zipcode)
-    # some outliers (53 out of 943), convert them into default city (NYC for now)
+    # some outliers (53 out of 943)
     if address is None:
         return None
 
@@ -26,6 +28,13 @@ def zipcode2area(sr, zipcode, mode="county"):
 
 
 def create_dataframe(rating_path, movie_path, user_path):
+    """
+    Read and merge data from rating, movie and user to construct input data frame.
+    :param rating_path: path to rating data file
+    :param movie_path: path to movie data file
+    :param user_path: path to user data file
+    :return: input features for predicting the ratings
+    """
     # Read ratings data
     columns_name = ["user_id", "item_id", "rating", "timestamp"]
     ratings_df = pd.read_csv(rating_path, sep="\t", names=columns_name)
@@ -81,6 +90,25 @@ def create_dataframe(rating_path, movie_path, user_path):
     return dataset
 
 
+def feature_tags(feature_names):
+    # current features can be divided into two parts:
+    # numeric ones
+    # categorical ones:
+    #   - gender, occupation, zip_code, movie genre
+    tags = ["numeric", "gender", "occupation", "zip_code", "genre"]
+
+    tags2cols = defaultdict(list)
+    for tag in tags:
+        for i, feature in enumerate(feature_names):
+            if re.search(tag, feature):
+                tags2cols[tag].append(i)
+
+    # make sure all columns are selected
+    assert sum(map(len, tags2cols.values())) == len(feature_names)
+
+    return tags2cols
+
+
 def prepare_data(rating_path_train, rating_path_test, movie_path, user_path, validation=None, random=None):
     train_df = create_dataframe(rating_path_train, movie_path, user_path)
     train_labels = train_df["rating"]
@@ -119,12 +147,13 @@ def prepare_data(rating_path_train, rating_path_test, movie_path, user_path, val
     data_pipeline = ColumnTransformer(transformers=[
         ("numerical", numeric_pipeline, num_vars),
         ("categorical", categorical_pipepline, cat_vars),
-        ("remain", remain_pipeline, remain_vars)
+        ("genre", remain_pipeline, remain_vars)
     ])
 
     train_input = data_pipeline.fit_transform(train_df)
     test_input = data_pipeline.transform(test_df)
-    val_input, val_labels = None, None
+    val_input, val_labels, val_ids = None, None, None
+    names = data_pipeline.get_feature_names_out()
     if validation is not None:
         train_input, val_input, train_labels, val_labels, train_ids, val_ids = train_test_split(train_input,
                                                                                                 train_labels,
@@ -135,4 +164,5 @@ def prepare_data(rating_path_train, rating_path_test, movie_path, user_path, val
 
     return {"train": (train_input, train_labels, train_ids),
             "val": (val_input, val_labels, val_ids),
-            "test": (test_input, test_labels, test_ids)}
+            "test": (test_input, test_labels, test_ids),
+            "feature_name": names}
