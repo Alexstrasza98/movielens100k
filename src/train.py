@@ -8,16 +8,16 @@ from torch import optim
 from torch.utils.data import DataLoader
 
 from src.utils import AverageMeter
-from src.data_preprocessing import prepare_data
+from src.data_preprocessing import prepare_data, title2bert
 from src.data_loader import Rating_Dataset
-from src.model import MovieRater_Simple
+from src.model import MovieRater_Simple, MovieRater_Embedding
 from src.evaluate import evaluate_model
 from src.configs import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-class Learner():
+class Learner:
     def __init__(self, train_config, run):
         """
         train_config: a dict of {'model': (required) model to use,
@@ -153,7 +153,7 @@ class Learner():
         pass
 
 
-def main(params):
+def main(params, build_bert=False, with_title=True):
     run = neptune.init(
         project="alexyannn/movielens100k",
         api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiJmNjA4ZTkyNi02OGQwLTRlNTAtYmZhZi1mNjQ0OTc5Y2Q0MzcifQ==",
@@ -163,6 +163,8 @@ def main(params):
     )
 
     # Prepare Dataset
+    if build_bert:
+        title2bert(movie_path="./data/u.item")
     run["parameters"] = params
 
     data = prepare_data(rating_path_train=TRAIN_SET_PATH,
@@ -174,13 +176,18 @@ def main(params):
     val_input, val_labels, val_ids = data["val"]
     test_input, test_labels, test_ids = data["test"]
 
-    train_ds = Rating_Dataset(train_input, train_labels, train_ids)
+    train_ds = Rating_Dataset(train_input, train_labels, train_ids, with_title)
     train_dl = DataLoader(train_ds, batch_size=params["bs"], shuffle=True)
-    val_ds = Rating_Dataset(val_input, val_labels, val_ids)
+    val_ds = Rating_Dataset(val_input, val_labels, val_ids, with_title)
     val_dl = DataLoader(val_ds, batch_size=params["bs"], shuffle=True)
 
     # Training
-    model = MovieRater_Simple(train_ds[0][0].shape[0], params["hidden_size"], model_name="movierater_simple")
+    input_dim = train_ds[0][0].shape[0]
+    if with_title:
+        data["feature_tags"]["numeric"].extend(range(input_dim - 768, input_dim))
+
+    # model = MovieRater_Simple(input_dim, params["hidden_size"], model_name="movierater_simple")
+    model = MovieRater_Embedding(input_dim, params["hidden_size"], data["feature_tags"])
     optimizer = optim.SGD(model.parameters(), lr=params["lr"], momentum=0.9)
     scheduler = optim.lr_scheduler.StepLR(optimizer, (params["epochs"] // 3) * 2)
     loss_fn = nn.MSELoss()

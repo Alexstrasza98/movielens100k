@@ -4,12 +4,41 @@ import time
 import uszipcode
 import re
 from collections import defaultdict
+import torch
+from tqdm import tqdm
 
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
+
+from transformers import AutoTokenizer, AutoModel
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+def title2bert(movie_path):
+    tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+    model = AutoModel.from_pretrained("distilbert-base-uncased").to(device)
+
+    movies = pd.read_csv(movie_path, sep="\|", encoding='ISO-8859-1', engine='python', names=[])
+    movies = movies.iloc[:, [0, 1]]
+    movies.columns = ["movie_id", "title"]
+    for _, (movie_id, title) in tqdm(movies.iterrows()):
+        title = title[:-6]
+        for target_piece in [", The", ", A"]:
+            if re.search(target_piece, title):
+                title = title.replace(target_piece, " ")
+                title = target_piece[2:] + " " + title
+
+        tokens = tokenizer(title, return_tensors="pt")
+
+        with torch.no_grad():
+            hidden = model(**tokens)
+            cls = hidden.last_hidden_state[:, 0, :]
+
+        torch.save(cls, f"./data/BERT_features/{movie_id}.pt")
 
 
 def zipcode2area(sr, zipcode, mode="county"):
@@ -29,7 +58,7 @@ def zipcode2area(sr, zipcode, mode="county"):
 
 def create_dataframe(rating_path, movie_path, user_path):
     """
-    Read and merge data from rating, movie and user to construct input data frame.
+    Read and merge data from rating, movie and user to construct input data frame
     :param rating_path: path to rating data file
     :param movie_path: path to movie data file
     :param user_path: path to user data file
@@ -135,7 +164,7 @@ def prepare_data(rating_path_train, rating_path_test, movie_path, user_path, val
         ("scale", StandardScaler())
     ])
 
-    categorical_pipepline = Pipeline(steps=[
+    categorical_pipeline = Pipeline(steps=[
         ("impute", SimpleImputer(strategy="most_frequent")),
         ("one-hot", OneHotEncoder(sparse=False))
     ])
@@ -146,7 +175,7 @@ def prepare_data(rating_path_train, rating_path_test, movie_path, user_path, val
 
     data_pipeline = ColumnTransformer(transformers=[
         ("numerical", numeric_pipeline, num_vars),
-        ("categorical", categorical_pipepline, cat_vars),
+        ("categorical", categorical_pipeline, cat_vars),
         ("genre", remain_pipeline, remain_vars)
     ])
 
@@ -165,4 +194,4 @@ def prepare_data(rating_path_train, rating_path_test, movie_path, user_path, val
     return {"train": (train_input, train_labels, train_ids),
             "val": (val_input, val_labels, val_ids),
             "test": (test_input, test_labels, test_ids),
-            "feature_name": names}
+            "feature_tags": feature_tags(names)}
